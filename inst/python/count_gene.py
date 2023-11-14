@@ -147,8 +147,8 @@ def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
     # check if there are remaining reads assigned to multiple genes
     dup_mask = recovered_ambig_df.duplicated(subset='read_id', keep = False)
     if dup_mask.sum():
-        warning_msg(f"Warning: {dup_mask.sum()} reads are assigned to multiple \
-        genes. Please check the output file for details.")
+        helper.warning_msg(f"Warning: {dup_mask.sum()} reads are assigned to multiple \
+            genes. Please check the output file for details.")
 
     return read_gene_assign_df
 
@@ -463,7 +463,21 @@ def remove_reads_from_fastq(in_fastq, out_fastq, read_id_lst,
     return
 
 # this is the main function
+
 def quantification(annotation, outdir, pipeline, n_process=12, saturation_curve=True):
+    """
+    Quantifies gene expression from single-cell RNA-seq data or bulk RNA-seq data.
+
+    Args:
+        annotation (str): Path to the gene annotation file in GTF format.
+        outdir (str): Path to the output directory.
+        pipeline (str): Type of pipeline. Can be "sc_single_sample", "bulk", or "sc_multi_sample".
+        n_process (int, optional): Number of processes to use for parallelization. Defaults to 12.
+        saturation_curve (bool, optional): Whether to generate a saturation curve. Defaults to True.
+
+    Returns:
+        None
+    """
 
     if pipeline == "sc_single_sample":
         in_fastq = os.path.join(outdir, "matched_reads.fastq")
