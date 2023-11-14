@@ -4,10 +4,9 @@ import os
 import sys
 import gzip
 import numpy as np
-# import editdistance
 import fast_edit_distance 
 from itertools import groupby
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, namedtuple
 import multiprocessing as mp
 import concurrent.futures
 import pysam as ps
@@ -110,6 +109,15 @@ def wrt_tr_to_csv(bc_tr_count_dict, transcript_dict, csv_f,
 
 
 def make_bc_dict(bc_anno):
+    """
+    Creates a dictionary of barcodes and their corresponding samples from a barcode annotation file.
+
+    Args:
+    bc_anno (str): The path to the barcode annotation file.
+
+    Returns:
+    dict: A dictionary with barcodes as keys and their corresponding samples as values.
+    """
     with open(bc_anno) as f:
         # skip header line
         f.readline()
@@ -157,15 +165,18 @@ def query_len(cigar_string, hard_clipping=False):
 def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_read_coverage, bc_file = False):
     """
     """
+
     fa_idx = dict((it.strip().split()[0], int(
         it.strip().split()[1])) for it in open(fa_idx_f))
+    tr_count_dict = defaultdict(int)
     bc_tr_count_dict = {}
     bc_tr_badcov_count_dict = {}
-    tr_cov_dict = {}
+    #tr_cov_dict = {}
     read_dict = {}
+    aligned_read = namedtuple('aligned_read', ['tr', 'AS', 'tr_cov', 'read_cov', 'mapq'])
     cnt_stat = Counter()
     bamfile = ps.AlignmentFile(bam_in, "rb")
-    gene_names = bamfile.references
+    # gene_names = bamfile.references
 
     if bc_file:
         bc_dict = make_bc_dict(bc_file)
@@ -173,41 +184,60 @@ def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_re
         if rec.is_unmapped:
             cnt_stat["unmapped"] += 1
             continue
-        map_st = rec.reference_start
-        map_en = rec.reference_end
-        tr = rec.reference_name
-        tr_cov = float(map_en-map_st)/fa_idx[tr]
-        tr_cov_dict.setdefault(tr, []).append(tr_cov)
+
+        # create a aligned_read namedtuple
+        rec_align_info = aligned_read(
+            tr = rec.reference_name, 
+            AS = rec.get_tag("AS"), 
+            tr_cov = (rec.reference_end-rec.reference_start)/fa_idx[rec.reference_name],
+            read_cov = float(rec.query_alignment_length)/rec.infer_read_length(), 
+            mapq = rec.mapping_quality)
+
+        # map_st = rec.reference_start
+        # map_en = rec.reference_end
+        # tr = rec.reference_name
+        # tr_cov = float(map_en-map_st)/fa_idx[tr]
+        #tr_cov_dict.setdefault(tr, []).append(tr_cov)
+        tr_count_dict[rec_align_info.tr] += 1
+
         if rec.query_name not in read_dict:
-            read_dict.setdefault(rec.query_name, []).append((tr, rec.get_tag("AS"), tr_cov, float(
-                rec.query_alignment_length)/rec.infer_read_length(), rec.mapping_quality))
-        else:
-            if rec.get_tag("AS") > read_dict[rec.query_name][0][1]:
-                read_dict[rec.query_name].insert(0, (tr, rec.get_tag("AS"), tr_cov, float(
-                    rec.query_alignment_length)/rec.infer_read_length(), rec.mapping_quality))
-            # same aligned sequence
-            elif rec.get_tag("AS") == read_dict[rec.query_name][0][1] and float(rec.query_alignment_length)/rec.infer_read_length() == read_dict[rec.query_name][0][3]:
-                # choose the one with higher transcript coverage, might be internal TSS
-                if tr_cov > read_dict[rec.query_name][0][2]:
-                    read_dict[rec.query_name].insert(0, (tr, rec.get_tag("AS"), tr_cov, float(
-                        rec.query_alignment_length)/rec.infer_read_length(), rec.mapping_quality))
-            else:
-                read_dict[rec.query_name].append((tr, rec.get_tag("AS"), tr_cov, float(
-                    rec.query_alignment_length)/rec.infer_read_length(), rec.mapping_quality))
-        if tr not in fa_idx:
-            cnt_stat["not_in_annotation"] += 1
-            print("\t" + str(tr), "not in annotation ???")
-    tr_kept = dict((tr, tr) for tr in tr_cov_dict if len(
-        [it for it in tr_cov_dict[tr] if it > 0.9]) > min_sup_reads)
+            read_dict.setdefault(rec.query_name, []).append(rec_align_info)
     
+        else:
+            if rec_align_info.AS > read_dict[rec.query_name][0].AS:
+                read_dict[rec.query_name].insert(0, rec_align_info)
+    
+            # if same alignment score choose the one with higher transcript coverage, might be internal TSS
+            elif rec_align_info.AS == read_dict[rec.query_name][0].AS and \
+                    rec_align_info.read_cov == read_dict[rec.query_name][0].read_cov:
+                
+                if rec_align_info.tr_cov > read_dict[rec.query_name][0].tr_cov:
+                    read_dict[rec.query_name].insert(0, rec_align_info)
+            else:
+                read_dict[rec.query_name].append(rec_align_info)
+        
+        if rec_align_info.tr not in fa_idx:
+            # This shouldn't happen but worth checking
+            cnt_stat["not_in_annotation"] += 1
+            print("\t" + str(rec_align_info.tr), "not in annotation ???")
+    
+    # TODO: The original code defined that a transcript is kept if it has > min_sup_reads reads with > 90% coverage
+    # However, it may result in a situation where a transcript with alternative TSS/TTS is discarded. I don't think 
+    # it is a good idea to discard such transcripts. The alternative TSS/TTS should be considered at the isoform
+    # identification step but not the quantification step.
+    # tr_kept = dict((tr, tr) for tr in tr_cov_dict if len(
+    #     [it for it in tr_cov_dict[tr] if it > 0.9]) > min_sup_reads)
+
+    # TEMP_FIX: keep all transcripts
+    tr_kept = set(tr for tr, cnt in tr_count_dict.items() if cnt > min_sup_reads)
     #unique_tr_count = Counter(read_dict[r][0][0]
     #                          for r in read_dict if read_dict[r][0][2] > 0.9)
 
     for r in read_dict:
-        tmp = read_dict[r]
-        tmp = [it for it in tmp if it[0] in tr_kept]
-        if len(tmp) > 0:
-            hit = tmp[0]  # transcript_id, pct_ref, pct_reads
+        # filter out aligned transcripts that are not in tr_kept
+        filtered_alignment = [it for it in read_dict[r] if it.tr in tr_kept]
+        if len(filtered_alignment) > 0:
+            hit = filtered_alignment[0]  # namedtuple('aligned_read', ['tr', 'AS', 'tr_cov', 'read_cov', 'mapq'])
         else:
             cnt_stat["no_good_match"] += 1
             continue
@@ -223,31 +253,33 @@ def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_re
 
         if bc_file:
             bc = bc_dict[bc]
-        if len(tmp) == 1 and tmp[0][4] > 0:
+        if len(filtered_alignment) == 1 and filtered_alignment[0].read_cov > 0:
             if bc not in bc_tr_count_dict:
                 bc_tr_count_dict[bc] = {}
-            bc_tr_count_dict[bc].setdefault(hit[0], []).append(umi)
+            bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
             cnt_stat["counted_reads"] += 1
-        elif len(tmp) > 1 and tmp[0][1] == tmp[1][1] and tmp[0][3] == tmp[1][3]:
-            if hit[1] > 0.8:
+        elif len(filtered_alignment) > 1 and \
+                filtered_alignment[0].AS == filtered_alignment[1].AS and \
+                filtered_alignment[0].tr_cov == filtered_alignment[1].tr_cov:
+            if hit.tr_cov >= min_tr_coverage:
                 if bc not in bc_tr_count_dict:
                     bc_tr_count_dict[bc] = {}
-                bc_tr_count_dict[bc].setdefault(hit[0], []).append(umi)
+                bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
                 cnt_stat["counted_reads"] += 1
             else:
                 cnt_stat["ambigious_reads"] += 1
                 if bc not in bc_tr_badcov_count_dict:
                     bc_tr_badcov_count_dict[bc] = {}
-                bc_tr_badcov_count_dict[bc].setdefault(hit[0], []).append(umi)
-        elif hit[2] < min_tr_coverage or hit[3] < min_read_coverage:
+                bc_tr_badcov_count_dict[bc].setdefault(hit.tr, []).append(umi)
+        elif hit.tr_cov < min_tr_coverage or hit.read_cov < min_read_coverage:
             cnt_stat["not_enough_coverage"] += 1
             if bc not in bc_tr_badcov_count_dict:
                 bc_tr_badcov_count_dict[bc] = {}
-            bc_tr_badcov_count_dict[bc].setdefault(hit[0], []).append(umi)
+            bc_tr_badcov_count_dict[bc].setdefault(hit.tr, []).append(umi)
         else:
             if bc not in bc_tr_count_dict:
                 bc_tr_count_dict[bc] = {}
-            bc_tr_count_dict[bc].setdefault(hit[0], []).append(umi)
+            bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
             cnt_stat["counted_reads"] += 1
     print(("\t" + str(cnt_stat)))
     return bc_tr_count_dict, bc_tr_badcov_count_dict, tr_kept
