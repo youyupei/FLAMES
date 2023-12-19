@@ -357,10 +357,15 @@ dim_reduction_spot_plot <- function(spe, background_img=NULL, dim_reduce="UMAP",
   plot_d <- as.data.frame(spatialCoords(spe))
   
   if (!is.null(annotation)){
+    # check whether the annotation column is in colData
+    if (!annotation %in% colnames(colData(spe))) {
+      stop(paste(annotation, "does not present in", colnames(colData(spe))))
+    }
     plot_d$annotation <- colData(spe)[[annotation]]
   } else {
      plot_d$annotation <- 1
   }
+  
   
   plot_d <- cbind(plot_d, as.data.frame(reducedDims(spe)[[dim_reduce]]))
   colnames(plot_d) <- c('imageX', 'imageY', 'annotation', 'Dim1', 'Dim2')
@@ -407,10 +412,26 @@ dim_reduction_spot_plot <- function(spe, background_img=NULL, dim_reduce="UMAP",
   }}
 
   p1 <- ggplotly(p1) %>%
-    highlight(on = "plotly_selected", off="plotly_deselect") 
+    highlight(on = "plotly_selected", off="plotly_deselect")  %>%
+    config(
+      toImageButtonOptions = list(
+        format = "svg",
+        filename = "myplot",
+        width = 800,
+        height = 500
+      )
+    )
 
   p2 <- ggplotly(p2) %>%
-    highlight(on = "plotly_selected", off="plotly_deselect") 
+    highlight(on = "plotly_selected", off="plotly_deselect") %>%
+    config(
+      toImageButtonOptions = list(
+        format = "svg",
+        filename = "myplot",
+        width = 800,
+        height = 500
+      )
+    )
     #  %>%
     # event_register("plotly_click", function(event, plotly_obj) {
     #   # Code to display additional information on click
@@ -462,7 +483,7 @@ plot_visium_spot_from_spe <- function(spe, background_img=NULL, annotation=NULL)
   p1 <- p1 + 
       geom_point(
         data=plot_d, 
-        aes(x=imageX, y=maxY-imageY, colour = annotation), size = 3, alpha=ifelse(is.null(background_img), 1, 0.85)) + 
+        aes(x=imageX, y=maxY-imageY, colour = annotation), size = 2, alpha=ifelse(is.null(background_img), 1, 0.85)) + 
       coord_fixed() + 
       theme_void()+ labs(color=annotation)
 
@@ -478,8 +499,9 @@ plot_visium_spot_from_spe <- function(spe, background_img=NULL, annotation=NULL)
 }
 
 
-spatial_barcode_shiny_plot <- function(spe, background_img=NULL) {
 
+
+export_spatial_barcode <- function(spe, background_img=NULL) {
   plot_d <- as.data.frame(spatialCoords(spe))
   colnames(plot_d) <- c('imageX', 'imageY')
   plot_d$barcode <- rownames(plot_d)
@@ -540,3 +562,26 @@ ui <- fluidPage(
 shinyApp(ui, server)
   
 }
+
+
+plot_feature_comp <- function(spe, features, assay_type = 'counts', background_img=NULL){
+  if (!is.null(background_img)) {
+    maxX <- dim(background_img)[1]
+    maxY <- dim(background_img)[2]
+    p1 <- ggplot(mapping = aes(1:maxX, 1:maxY)) +
+        annotation_raster(background_img, xmin = 1, xmax = maxX, ymin = 1, ymax = maxY)
+  } else {
+      maxX <- max(plot_d$imageX)
+      minX <- min(plot_d$imageX)
+      maxY <- max(plot_d$imageY)
+      minY <- min(plot_d$imageY)
+      p1 <- ggplot(mapping = aes(minX:maxX, minX:maxY))
+  }
+
+  spe <- spe[features, ]
+  plot_d <- as.data.frame(spatialCoords(spe))
+  plot_d <- cbind(plot_d, as.matrix(t(assay(spe, assay_type))))
+  colnames(plot_d) <- c('imageX', 'imageY', features)
+  p1 + geom_scatterpie(aes(x=imageX, y=maxY-imageY), data=plot_d, cols=features,pie_scale = 0.6, color=NA) + coord_fixed() + theme_void()
+}
+
