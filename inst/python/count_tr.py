@@ -181,7 +181,8 @@ def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_re
     if bc_file:
         bc_dict = make_bc_dict(bc_file)
     for rec in bamfile.fetch(until_eof=True):
-        if rec.is_unmapped:
+        # update: treat mapping quality 0 as unmapped
+        if rec.is_unmapped or rec.mapping_quality==0:
             cnt_stat["unmapped"] += 1
             continue
 
@@ -253,34 +254,26 @@ def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_re
 
         if bc_file:
             bc = bc_dict[bc]
-        if len(filtered_alignment) == 1 and filtered_alignment[0].read_cov > 0:
-            if bc not in bc_tr_count_dict:
-                bc_tr_count_dict[bc] = {}
-            bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
-            cnt_stat["counted_reads"] += 1
-        elif len(filtered_alignment) > 1 and \
-                filtered_alignment[0].AS == filtered_alignment[1].AS and \
-                filtered_alignment[0].tr_cov == filtered_alignment[1].tr_cov:
-            if hit.tr_cov >= min_tr_coverage:
-                if bc not in bc_tr_count_dict:
-                    bc_tr_count_dict[bc] = {}
-                bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
-                cnt_stat["counted_reads"] += 1
-            else:
+        
+        if hit.tr_cov > min_tr_coverage and hit.read_cov > min_read_coverage:
+            if len(filtered_alignment) > 1 and \
+                    hit.AS == filtered_alignment[1].AS and \
+                    hit.tr_cov == filtered_alignment[1].tr_cov:
                 cnt_stat["ambigious_reads"] += 1
                 if bc not in bc_tr_badcov_count_dict:
                     bc_tr_badcov_count_dict[bc] = {}
                 bc_tr_badcov_count_dict[bc].setdefault(hit.tr, []).append(umi)
-        elif hit.tr_cov < min_tr_coverage or hit.read_cov < min_read_coverage:
+
+            else:
+                if bc not in bc_tr_count_dict:
+                    bc_tr_count_dict[bc] = {}
+                bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
+                cnt_stat["counted_reads"] += 1
+        else:
             cnt_stat["not_enough_coverage"] += 1
             if bc not in bc_tr_badcov_count_dict:
                 bc_tr_badcov_count_dict[bc] = {}
             bc_tr_badcov_count_dict[bc].setdefault(hit.tr, []).append(umi)
-        else:
-            if bc not in bc_tr_count_dict:
-                bc_tr_count_dict[bc] = {}
-            bc_tr_count_dict[bc].setdefault(hit.tr, []).append(umi)
-            cnt_stat["counted_reads"] += 1
     print(("\t" + str(cnt_stat)))
     return bc_tr_count_dict, bc_tr_badcov_count_dict, tr_kept
     

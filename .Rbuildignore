@@ -9,3 +9,4 @@
 ^Meta$
 ^\.github$
 ^data-raw$
+R/sp_analysis.R
